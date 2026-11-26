@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Worklog",
+    "description": "One line per finished turn, one file per day, searchable from the sidebar.",
+    "detail": "docs/DETAIL.md"
+  }
+}

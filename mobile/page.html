@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>{{WORKLOG_TITLE}}</title>
+<link rel="stylesheet" href="/dsh-worklog/mobile/style.css?mt={{WORKLOG_TOKEN}}">
+</head>
+<body>
+<header class="topbar"><div class="topbar-copy"><p class="eyebrow">WORKLOG · <span data-date></span></p><h1>{{WORKLOG_TITLE}}</h1></div><span class="total" data-total>0 条</span></header>
+<main><nav class="tabs" aria-label="日志类型" data-tabs></nav><section class="entries" aria-live="polite" data-entries></section><p class="empty" data-empty hidden>今天还没有工作日志</p><footer data-footer></footer></main>
+<script>
+(() => {
+  const data = {{WORKLOG_DATA}};
+  const copy = data.copy;
+  const labels = { all: copy.all, turn: copy.turn, note: copy.note, tool: copy.tool };
+  const counts = { all: data.entries.length, turn: 0, note: 0, tool: 0 };
+  for (const entry of data.entries) if (entry.kind in counts) counts[entry.kind] += 1;
+  const tabs = document.querySelector('[data-tabs]');
+  const list = document.querySelector('[data-entries]');
+  const empty = document.querySelector('[data-empty]');
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+  const time = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(data.language, { hour: '2-digit', minute: '2-digit' }).format(date); };
+  const day = new Intl.DateTimeFormat(data.language, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${data.date}T12:00:00`));
+  document.documentElement.lang = data.language;
+  tabs.setAttribute('aria-label', copy.tabsLabel);
+  document.querySelector('[data-date]').textContent = day;
+  // Topics are keyed by label, not by id: ids restart at t1 in every session.
+  const topicCount = new Set(data.entries
+    .map((entry) => (entry.topic || '').toLowerCase().replace(/[\s，。、,.:：;；!！?？"'“”‘’（）()【】\[\]<>《》\-—_/\\|]+/g, ''))
+    .filter(Boolean)).size;
+  document.querySelector('[data-total]').textContent = `${data.entries.length} ${data.language === 'en' ? 'entries' : '条'}${
+    topicCount > 0 ? ` · ${copy.topics.replace('{n}', topicCount)}` : ''}`;
+  const footer = document.querySelector('[data-footer]');
+  if (!data.captureEnabled) footer.textContent = copy.paused;
+  else if (data.entries.length < data.count) footer.textContent = copy.recent.replace('{shown}', data.entries.length).replace('{count}', data.count);
+  else footer.textContent = copy.saved;
+  for (const key of ['all', 'turn', 'note', 'tool']) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'tab'; button.dataset.kind = key;
+    button.textContent = `${labels[key]} ${counts[key]}`; button.addEventListener('click', () => select(key)); tabs.append(button);
+  }
+  const first = ['turn', 'note', 'tool'].find((key) => counts[key] > 0) || 'all';
+  function select(kind) {
+    for (const button of tabs.children) { const active = button.dataset.kind === kind; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
+    const filtered = kind === 'all' ? data.entries : data.entries.filter((entry) => entry.kind === kind);
+    list.innerHTML = filtered.map((entry) => {
+      const rawTitle = entry.sessionTitle || '';
+      const title = /^(?:【工作日志】|\[Worklog\])/.test(rawTitle) || rawTitle === entry.kind ? '' : rawTitle;
+      const summary = entry.summary || '';
+      const engines = entry.summaries || {};
+      const modelSummaries = [];
+      const labels = entry.summaryLabels || {};
+      if (engines.primary) modelSummaries.push(`<div class="model-summary"><h3>${esc(labels.primary || copy.deepseek)}</h3><p>${esc(engines.primary)}</p></div>`);
+      if (engines.secondary) modelSummaries.push(`<div class="model-summary"><h3>${esc(labels.secondary || copy.local)}</h3><p>${esc(engines.secondary)}</p></div>`);
+      const details = modelSummaries.length ? `<details><summary>${esc(copy.details)}</summary><div class="model-summaries">${modelSummaries.join('')}</div></details>` : '';
+      const heading = title ? `<h2>${esc(title)}</h2>` : '';
+      const tags = (entry.tools || []).slice(0, 4).map((tool) => `<span class="tag">${esc(tool)}</span>`).join('');
+      const topicChip = entry.topic ? `<span class="topic">${esc(entry.topic)}</span>` : '';
+      return `<article class="entry"><div class="entry-top"><span class="kind">${esc(labels[entry.kind] || entry.kind || '记录')}</span>${topicChip}<time>${esc(time(entry.ts))}</time></div>${heading}<p>${esc(summary)}</p>${details}${tags ? `<div class="tags">${tags}</div>` : ''}</article>`;
+    }).join('');
+    empty.textContent = kind === 'all' ? copy.emptyAll : copy.emptyFiltered;
+    empty.hidden = filtered.length > 0;
+  }
+  select(first);
+  // The header grows with the notch inset, so the tab bar follows its measured height
+  // instead of a fixed offset that would slide underneath it on a notched iPhone.
+  const topbar = document.querySelector('.topbar');
+  const syncTabs = () => document.documentElement.style.setProperty('--header-h', `${topbar.getBoundingClientRect().height}px`);
+  syncTabs();
+  window.addEventListener('resize', syncTabs);
+  window.addEventListener('orientationchange', syncTabs);
+})();
+</script>
+</body>
+</html>

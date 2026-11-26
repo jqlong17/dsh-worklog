@@ -1,0 +1,71 @@
+{
+  "name": "dsh-worklog",
+  "version": "0.1.3",
+  "description": "Automatic work log for DeepSeek Harness: one line per turn, dual model summaries, topic tracking, timeline view.",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "mobile.js",
+    "mobile",
+    "scripts",
+    "selftest.mjs",
+    "vendor",
+    "locale/*.json",
+    "icon.svg",
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    },
+    "mobile": {
+      "version": 1,
+      "kind": "web",
+      "title": "Worklog · 工作日志",
+      "path": "/dsh-worklog/mobile"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "worklog",
+    "journal",
+    "timeline",
+    "gantt",
+    "summary",
+    "ollama",
+    "工作日志",
+    "主题"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.1"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jqlong17/dsh-worklog.git"
+  },
+  "homepage": "https://github.com/jqlong17/dsh-worklog#readme",
+  "bugs": {
+    "url": "https://github.com/jqlong17/dsh-worklog/issues"
+  },
+  "author": "jqlong17"
+}

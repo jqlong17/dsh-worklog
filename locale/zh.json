@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "工作日志",
+    "description": "每次对话结束自动记一行，按天存文件，可检索、可回看。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
