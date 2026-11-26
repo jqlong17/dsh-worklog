@@ -1,4 +1,4 @@
-# dsh-worklog
+# dsh-worklog-topics
 
 DeepSeek Harness 的自动工作日志：每轮对话结束自动记一行，按天存 NDJSON，可按会话、按主题、按时间轴回看，也能被 Agent 直接检索。
 
