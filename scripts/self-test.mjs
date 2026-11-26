@@ -731,6 +731,13 @@ console.log('[panel geometry]')
   check('the Gantt label constant matches the CSS width', labelWidth !== undefined && labelWidth === cssWidth, `${labelWidth} vs ${cssWidth}`)
   check('the panel box model is border-box', source.includes('.wl-root, .wl-root *') && source.includes('box-sizing: border-box'))
   check('bars carry a hover handler', source.includes('onMouseEnter') && source.includes('wl-gantt-tip'))
+  {
+    // Every bar element must bind the card itself; a bare `title` never fires fast
+    // enough to be seen, and one missing handler is invisible in a screenshot.
+    const bars = source.split("className: 'wl-gantt-bar'").slice(1)
+    const wired = bars.filter((chunk) => chunk.slice(0, 400).includes('onMouseEnter'))
+    check('every bar binds a hover card', bars.length > 0 && wired.length === bars.length, `${wired.length}/${bars.length}`)
+  }
 
   // React hooks must not sit behind an early return: the first paint (no data)
   // would run fewer hooks than the second, which blanks the whole panel.
@@ -738,6 +745,7 @@ console.log('[panel geometry]')
   const earlyAt = gantt.indexOf('if (list.length === 0)')
   const lastHookAt = Math.max(gantt.lastIndexOf('React.useState'), gantt.lastIndexOf('React.useRef'), gantt.lastIndexOf('React.useEffect'))
   check('no hook sits behind the Gantt early return', earlyAt === -1 || earlyAt > lastHookAt, `${earlyAt} vs ${lastHookAt}`)
+  check('the timeline re-parks after the first fetch', gantt.includes('parkedFor') && gantt.includes('flat.length === 0) return'))
 }
 
 console.log('[panel routes]')
