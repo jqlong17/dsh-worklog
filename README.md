@@ -2,7 +2,7 @@
 
 DeepSeek Harness 的自动工作日志：每轮对话结束自动记一行，按天存 NDJSON，可按会话、按主题、按时间轴回看，也能被 Agent 直接检索。
 
-> 插件内部 id 与侧栏标签是 `dsh-worklog`；npm 包名是 `dsh-worklog-topics`（`dsh-worklog` 已被他人占用）。
+> npm 包名是 `dsh-worklog-topics`（`dsh-worklog` 已被他人占用）；侧栏标签显示为「工作日志」。
 
 ![甘特视图](docs/screenshots/panel-gantt.webp)
 
