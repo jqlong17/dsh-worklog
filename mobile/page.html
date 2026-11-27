@@ -9,7 +9,7 @@
 </head>
 <body>
 <header class="topbar"><div class="topbar-copy"><p class="eyebrow">WORKLOG · <span data-date></span></p><h1>{{WORKLOG_TITLE}}</h1></div><span class="total" data-total>0 条</span></header>
-<main><section class="gantt" data-gantt>{{WORKLOG_GANTT}}</section><nav class="tabs" aria-label="日志类型" data-tabs></nav><section class="entries" aria-live="polite" data-entries></section><p class="empty" data-empty hidden>今天还没有工作日志</p><footer data-footer></footer></main>
+<main><section class="daily" data-daily>{{WORKLOG_DAILY}}</section><section class="gantt" data-gantt>{{WORKLOG_GANTT}}</section><nav class="tabs" aria-label="日志类型" data-tabs></nav><section class="entries" aria-live="polite" data-entries></section><p class="empty" data-empty hidden>今天还没有工作日志</p><footer data-footer></footer></main>
 <script>
 (() => {
   const data = {{WORKLOG_DATA}};

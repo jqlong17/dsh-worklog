@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { renderGantt } from '../mobile.js'
+import { renderDaily, renderGantt } from '../mobile.js'
 import { createStore } from '../lib/store.js'
 import { Config, cleanDailyText, coverageGap, dayDigest, aiSystemPrompt, aiUserPrompt, apply, cleanModelText, combineSummary, contextBlock, digest, groupBySession, groupByTopic, normalizeTopicLabel, parseSummaryOutput, projectKey, resolveTopic, sessionFileOf, similarTopicLabel, summarizeWithLlm, summarizeWithOllama } from '../lib/index.js'
 import { mobileInternals, registerMobile } from '../lib/mobile.js'
@@ -848,6 +848,23 @@ console.log('[mobile gantt]')
   check('the page shows a summary sheet on tap', page.includes('g-sheet') && page.includes('closest(\'.g-line i[data-summary]\')'), '')
   const style = readFileSync(new URL('../mobile/style.css', import.meta.url).pathname, 'utf8')
   check('the sheet is styled as an overlay', style.includes('.g-sheet') && style.includes('.g-sheet[hidden]'), '')
+}
+
+console.log('[mobile daily]')
+{
+  const day = {
+    slots: {
+      primary: { text: '今天把登录链路跑通了。', model: 'deepseek-flash' },
+      secondary: { text: '完成登录联调。', model: 'qwen3.5', coverage: { required: 3, covered: 1, missing: ['接口联调'] } },
+    },
+  }
+  const html = renderDaily('2026-11-27', day, 'zh')
+  check('the phone renders one card per summariser', (html.match(/class="daily-slot"/g) ?? []).length === 2, String((html.match(/class="daily-slot"/g) ?? []).length))
+  check('the phone shows the day and both model names', html.includes('2026-11-27') && html.includes('deepseek-flash') && html.includes('qwen3.5'), '')
+  check('a thin summary is flagged on the phone too', html.includes('覆盖不足') && html.includes('接口联调'), '')
+  check('no summary renders nothing', renderDaily('2026-11-27', null, 'zh') === '', '')
+  check('an empty slot list renders nothing', renderDaily('2026-11-27', { slots: {} }, 'zh') === '', '')
+  check('the page has a slot for the summary', readFileSync(new URL('../mobile/page.html', import.meta.url).pathname, 'utf8').includes('{{WORKLOG_DAILY}}'), '')
 }
 
 console.log('[gantt render smoke]')

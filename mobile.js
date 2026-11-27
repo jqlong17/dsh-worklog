@@ -177,9 +177,39 @@ export function renderGantt(entries, date, gapMs) {
     + `<div class="g-scroll" data-focus="${focus}">${axis}${trackRows.join('')}</div></div>`
 }
 
-function renderPage(template, records, count, date, title, token, language, captureEnabled, gapMinutes) {
+/**
+ * Day summary block for the Pocket page.
+ *
+ * Same file the panel reads: one card per summariser, so the phone shows exactly
+ * what the desktop showed, including a thin-coverage warning.
+ */
+export function renderDaily(day, daily, language) {
+  if (daily === null || typeof daily !== 'object') return ''
+  const slots = daily.slots && typeof daily.slots === 'object' ? daily.slots : {}
+  const cards = []
+  for (const [slot, value] of Object.entries(slots)) {
+    if (value === null || typeof value !== 'object' || typeof value.text !== 'string' || value.text === '') continue
+    const label = slot === 'secondary'
+      ? (language === 'en' ? 'Comparison' : '对比摘要')
+      : (language === 'en' ? 'Primary' : '主摘要')
+    const model = typeof value.model === 'string' && value.model !== '' ? ` · ${escapeHtml(value.model)}` : ''
+    const thin = value.coverage && typeof value.coverage.covered === 'number'
+      && value.coverage.covered < value.coverage.required
+      && Array.isArray(value.coverage.missing) && value.coverage.missing.length > 0
+    const flag = thin
+      ? `<p class="daily-flag">${language === 'en' ? 'Thin coverage: missed' : '覆盖不足：漏了'} ${escapeHtml(value.coverage.missing.join('、'))}</p>`
+      : ''
+    cards.push(`<div class="daily-slot"><div class="daily-label">${label}${model}</div>${flag}<p>${escapeHtml(value.text)}</p></div>`)
+  }
+  if (cards.length === 0) return ''
+  const title = language === 'en' ? 'Daily summary' : '日总结'
+  return `<div class="daily-head"><span>${escapeHtml(day)} · ${title}</span></div>${cards.join('')}`
+}
+
+function renderPage(template, records, count, date, title, token, language, captureEnabled, gapMinutes, daily) {
   const entries = records.map(publicEntry)
   const gantt = renderGantt(entries, date, (gapMinutes ?? 10) * 60000)
+  const dailyHtml = renderDaily(date, daily, language)
   const data = JSON.stringify({ date, count, language, entries, copy: mobileCopy(language), captureEnabled: captureEnabled !== false, gantt: gantt !== '' })
     .replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026')
   const safeTitle = String(title).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
@@ -187,10 +217,11 @@ function renderPage(template, records, count, date, title, token, language, capt
     .replaceAll('{{WORKLOG_TOKEN}}', token)
     .replaceAll('{{WORKLOG_DATA}}', data)
     .replaceAll('{{WORKLOG_GANTT}}', gantt)
+    .replaceAll('{{WORKLOG_DAILY}}', dailyHtml)
 }
 
 /** Register the read-only Pocket page. The host's App token is format-checked as specified by dsh-plugin-panel. */
-export function registerMobile(ctx, store, isCaptureEnabled = () => true, visibleOnly = (records) => records, mergeGapMinutes = () => 10) {
+export function registerMobile(ctx, store, isCaptureEnabled = () => true, visibleOnly = (records) => records, mergeGapMinutes = () => 10, readDaily = () => null) {
   const web = ctx.webServer ?? ctx.get?.('webServer')
   if (!web || typeof web.register !== 'function') return () => {}
   return web.register({
@@ -212,7 +243,7 @@ export function registerMobile(ctx, store, isCaptureEnabled = () => true, visibl
         const records = all.slice(-MAX_MOBILE_ENTRIES).reverse()
         const meta = localeMeta(req.headers?.['accept-language'])
         const template = readFileSync(PAGE_FILE, 'utf8')
-        return send(res, 200, renderPage(template, records, all.length, date, meta.title, token, meta.language, isCaptureEnabled(), mergeGapMinutes()), 'text/html; charset=utf-8')
+        return send(res, 200, renderPage(template, records, all.length, date, meta.title, token, meta.language, isCaptureEnabled(), mergeGapMinutes(), readDaily(date)), 'text/html; charset=utf-8')
       } catch (error) {
         return send(res, 500, `读取工作日志失败：${error instanceof Error ? error.message : String(error)}`)
       }
