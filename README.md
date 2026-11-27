@@ -5,6 +5,7 @@ DeepSeek Harness 的自动工作日志：每轮对话结束自动记一行，按
 > npm 包名是 `dsh-worklog-topics`（`dsh-worklog` 已被他人占用）；侧栏标签显示为「工作日志」。
 
 ![甘特视图](docs/screenshots/panel-gantt.webp)
+![日总结与按日期](docs/screenshots/panel-daily.webp)
 
 ## 它解决什么问题
 
