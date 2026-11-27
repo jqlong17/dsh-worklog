@@ -1,6 +1,6 @@
 {
   "name": "dsh-worklog-topics",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Automatic work log for DeepSeek Harness: one line per turn, dual model summaries, topic tracking, timeline view.",
   "type": "module",
   "exports": {
@@ -20,7 +20,8 @@
     "locale/*.json",
     "icon.svg",
     "cordis.patch.yml",
-    "docs",
+    "docs/*.md",
+    "docs/marketing/*.webp",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
