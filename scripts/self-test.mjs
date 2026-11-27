@@ -869,6 +869,37 @@ console.log('[session title freshness]')
   check('the phone header uses the newest title', gantt.includes('新名字') && !gantt.includes('旧名字'), gantt.slice(0, 120))
 }
 
+console.log('[DSH projection titles]')
+{
+  // DSH keeps the current session title in its projection; a rename after the turn
+  // was written only shows up there.
+  const home = mkdtempSync(join(tmpdir(), 'worklog-proj-home-'))
+  mkdirSync(join(home, 'storages', 'session_projcache', 'sessions'), { recursive: true })
+  const sessionId = 'session-abc'
+  writeFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), JSON.stringify({
+    record: { rows: { title: { val: '【改过的名字】' } } },
+  }))
+  const saved = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const titledDir = mkdtempSync(join(tmpdir(), 'worklog-titled-'))
+  const store2 = createStore(() => ({ storePath: titledDir, captureEnabled: true, includeToolCalls: true }))
+  store2.append({ ts: '2026-11-27T01:00:00.000Z', date: '2026-11-27', kind: 'turn', sessionId, sessionTitle: '旧名字', summary: 'a' })
+  const ctxF = fakeContext()
+  apply(ctxF.ctx, resolveConfig({ storePath: titledDir, captureEnabled: true, aiDeepseek: false, aiOllama: false }))
+  const today = await Object.fromEntries(ctxF.registrations.tools.map((tool) => [tool.name, tool])).worklog_today.execute({ date: '2026-11-27' })
+  check('the title comes from DSH, not from the record', today.entries[0]?.sessionTitle === '【改过的名字】', JSON.stringify(today.entries[0]?.sessionTitle))
+
+  writeFileSync(join(home, 'storages', 'session_projcache', 'sessions', `${sessionId}.json`), JSON.stringify({
+    record: { rows: { title: { val: '【又改了一次】' } } },
+  }))
+  const again = await Object.fromEntries(ctxF.registrations.tools.map((tool) => [tool.name, tool])).worklog_today.execute({ date: '2026-11-27' })
+  check('a newer projection is picked up on the next read', again.entries[0]?.sessionTitle === '【又改了一次】', JSON.stringify(again.entries[0]?.sessionTitle))
+
+  if (saved === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = saved
+}
+
 console.log('[mobile daily]')
 {
   const day = {
