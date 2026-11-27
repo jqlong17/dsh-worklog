@@ -89,17 +89,108 @@ function publicEntry(record) {
   }
 }
 
-function renderPage(template, records, count, date, title, token, language, captureEnabled) {
-  const data = JSON.stringify({ date, count, language, entries: records.map(publicEntry), copy: mobileCopy(language), captureEnabled: captureEnabled !== false })
+/** Join segments that follow each other within `gapMs`; drawing only, never grouping. */
+function mergeSegments(segments, gapMs) {
+  const sorted = [...segments].sort((left, right) => left[0] - right[0])
+  const out = []
+  for (const segment of sorted) {
+    const last = out[out.length - 1]
+    if (last !== undefined && gapMs > 0 && segment[0] - last[1] <= gapMs) {
+      last[1] = Math.max(last[1], segment[1])
+      last[2] = segment[2] || last[2]
+      continue
+    }
+    out.push([segment[0], segment[1], segment[2]])
+  }
+  return out
+}
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+
+/**
+ * One row per topic across the whole day, drawn as a 24-hour strip.
+ *
+ * Same rules as the panel: sessions group the rows, topics are the only level
+ * below, and segments are merged by the configured gap. Widths are percentages so
+ * the strip fits any phone without horizontal scrolling.
+ */
+export function renderGantt(entries, date, gapMs) {
+  const dayStart = new Date(`${date}T00:00:00`).getTime()
+  const PX_PER_MIN = 1.4
+  const TRACK_W = Math.round(24 * 60 * PX_PER_MIN)
+  const GAP_CAP = 45 * 60000
+  const MIN_BAR_MS = 2 * 60000
+
+  const bySession = new Map()
+  for (const entry of entries) {
+    if (typeof entry.topic !== 'string' || entry.topic.trim() === '') continue
+    const at = Date.parse(entry.ts)
+    if (!Number.isFinite(at)) continue
+    const key = entry.sessionId || entry.sessionTitle || 'session'
+    if (!bySession.has(key)) bySession.set(key, { key, title: entry.sessionTitle || key, turns: [] })
+    bySession.get(key).turns.push({ at, topic: entry.topic.trim(), summary: String(entry.summary ?? '') })
+  }
+  const sessions = [...bySession.values()].filter((group) => group.turns.length > 0)
+  if (sessions.length === 0) return ''
+
+  const minuteOf = (at) => (at - dayStart) / 60000
+  const labelRows = []
+  const trackRows = []
+  let firstBarLeft = null
+  for (const group of sessions) {
+    group.turns.sort((left, right) => left.at - right.at)
+    const topics = new Map()
+    group.turns.forEach((turn, index) => {
+      const next = index + 1 < group.turns.length ? group.turns[index + 1].at : Number.NaN
+      // A turn owns the time up to the next turn, capped, so a stretch of work does
+      // not look like a one-minute dot.
+      const stop = Number.isFinite(next) ? Math.min(next, turn.at + GAP_CAP) : turn.at + MIN_BAR_MS
+      const key = turn.topic.toLowerCase()
+      if (!topics.has(key)) topics.set(key, { topic: turn.topic, segments: [], first: turn.at })
+      topics.get(key).segments.push([turn.at, Math.max(stop, turn.at + MIN_BAR_MS), turn.summary])
+    })
+    labelRows.push(`<div class="g-label g-head-label">${escapeHtml(group.title)}</div>`)
+    trackRows.push(`<div class="g-line g-head"></div>`)
+    for (const topic of [...topics.values()].sort((left, right) => left.first - right.first)) {
+      const bars = mergeSegments(topic.segments, gapMs).map((segment) => {
+        const left = Math.max(0, Math.min(TRACK_W, minuteOf(segment[0]) * PX_PER_MIN))
+        const width = Math.max(3, Math.min(TRACK_W - left, ((segment[1] - segment[0]) / 60000) * PX_PER_MIN))
+        if (firstBarLeft === null) firstBarLeft = left
+        const clock = new Date(segment[0]).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+        const summary = String(segment[2] ?? '')
+        // Tap target: the bar carries what the card would say, the sheet shows it.
+        return `<i role="button" tabindex="0" data-clock="${clock}" data-topic="${escapeHtml(topic.topic)}" data-summary="${escapeHtml(summary)}" style="left:${left.toFixed(1)}px;width:${width.toFixed(1)}px"></i>`
+      }).join('')
+      labelRows.push(`<div class="g-label">${escapeHtml(topic.topic)}</div>`)
+      trackRows.push(`<div class="g-line">${bars}</div>`)
+    }
+  }
+
+  const ticks = []
+  for (let hour = 0; hour <= 24; hour += 3) {
+    ticks.push(`<span style="left:${(hour * 60 * PX_PER_MIN).toFixed(1)}px">${String(hour).padStart(2, '0')}</span>`)
+  }
+  const axis = `<div class="g-ticks" style="width:${TRACK_W}px">${ticks.join('')}</div>`
+  // Open the strip where the day actually has work, not at 00:00.
+  const focus = Math.max(0, Math.round((firstBarLeft ?? 0) - 24))
+  return `<div class="g-layout"><div class="g-labels"><div class="g-axis-space"></div>${labelRows.join('')}</div>`
+    + `<div class="g-scroll" data-focus="${focus}">${axis}${trackRows.join('')}</div></div>`
+}
+
+function renderPage(template, records, count, date, title, token, language, captureEnabled, gapMinutes) {
+  const entries = records.map(publicEntry)
+  const gantt = renderGantt(entries, date, (gapMinutes ?? 10) * 60000)
+  const data = JSON.stringify({ date, count, language, entries, copy: mobileCopy(language), captureEnabled: captureEnabled !== false, gantt: gantt !== '' })
     .replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026')
   const safeTitle = String(title).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
   return template.replaceAll('{{WORKLOG_TITLE}}', safeTitle)
     .replaceAll('{{WORKLOG_TOKEN}}', token)
     .replaceAll('{{WORKLOG_DATA}}', data)
+    .replaceAll('{{WORKLOG_GANTT}}', gantt)
 }
 
 /** Register the read-only Pocket page. The host's App token is format-checked as specified by dsh-plugin-panel. */
-export function registerMobile(ctx, store, isCaptureEnabled = () => true) {
+export function registerMobile(ctx, store, isCaptureEnabled = () => true, visibleOnly = (records) => records, mergeGapMinutes = () => 10) {
   const web = ctx.webServer ?? ctx.get?.('webServer')
   if (!web || typeof web.register !== 'function') return () => {}
   return web.register({
@@ -117,11 +208,11 @@ export function registerMobile(ctx, store, isCaptureEnabled = () => true) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed')
       try {
         const date = dayOf()
-        const all = store.readDay(date)
+        const all = visibleOnly(store.readDay(date))
         const records = all.slice(-MAX_MOBILE_ENTRIES).reverse()
         const meta = localeMeta(req.headers?.['accept-language'])
         const template = readFileSync(PAGE_FILE, 'utf8')
-        return send(res, 200, renderPage(template, records, all.length, date, meta.title, token, meta.language, isCaptureEnabled()), 'text/html; charset=utf-8')
+        return send(res, 200, renderPage(template, records, all.length, date, meta.title, token, meta.language, isCaptureEnabled(), mergeGapMinutes()), 'text/html; charset=utf-8')
       } catch (error) {
         return send(res, 500, `读取工作日志失败：${error instanceof Error ? error.message : String(error)}`)
       }

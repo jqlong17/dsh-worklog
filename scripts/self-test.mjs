@@ -11,7 +11,9 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Config, aiSystemPrompt, aiUserPrompt, apply, cleanModelText, combineSummary, contextBlock, digest, groupBySession, groupByTopic, normalizeTopicLabel, parseSummaryOutput, projectKey, resolveTopic, sessionFileOf, summarizeWithLlm, summarizeWithOllama } from '../lib/index.js'
+import { renderGantt } from '../mobile.js'
+import { createStore } from '../lib/store.js'
+import { Config, cleanDailyText, coverageGap, dayDigest, aiSystemPrompt, aiUserPrompt, apply, cleanModelText, combineSummary, contextBlock, digest, groupBySession, groupByTopic, normalizeTopicLabel, parseSummaryOutput, projectKey, resolveTopic, sessionFileOf, similarTopicLabel, summarizeWithLlm, summarizeWithOllama } from '../lib/index.js'
 import { mobileInternals, registerMobile } from '../lib/mobile.js'
 
 let failures = 0
@@ -653,8 +655,8 @@ console.log('[tools]')
 {
   const { registrations } = contextA
   const names = registrations.tools.map((tool) => tool.name).sort()
-  check('five tools registered', names.length === 5, names.join(','))
-  check('tool names', names.join(',') === 'worklog_append,worklog_search,worklog_status,worklog_today,worklog_topics', names.join(','))
+  check('seven tools registered', names.length === 7, names.join(','))
+  check('tool names', names.join(',') === 'worklog_append,worklog_daily,worklog_search,worklog_status,worklog_today,worklog_topic_edit,worklog_topics', names.join(','))
   const byName = Object.fromEntries(registrations.tools.map((tool) => [tool.name, tool]))
   for (const tool of registrations.tools) {
     check(`${tool.name} declares object parameters`, tool.parameters?.type === 'object')
@@ -720,6 +722,281 @@ console.log('[custom prompt]')
   globalThis.fetch = originalFetch
 }
 
+console.log('[archived sessions]')
+{
+  // The filter reads DSH's workspace store; a missing or broken file must not hide
+  // anything, and an archived id must disappear from every read path.
+  const home = mkdtempSync(join(tmpdir(), 'worklog-dsh-home-'))
+  const storeDir = join(home, 'storages')
+  mkdirSync(storeDir, { recursive: true })
+  const savedHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const storeA2 = mkdtempSync(join(tmpdir(), 'worklog-store-arch-'))
+  const ctxA2 = fakeContext()
+  apply(ctxA2.ctx, resolveConfig({ storePath: storeA2, captureEnabled: true, aiDeepseek: false, aiOllama: false }))
+  const keep = makeSession('session-keep', repo)
+  const drop = makeSession('session-drop', repo)
+  for (const [session, index] of [[keep, 1], [drop, 2]]) {
+    ctxA2.emit('turn/start', session, { type: 'turn/start', data: { turn: index } })
+    ctxA2.emit('user/message', session, { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: `第${index}轮` }], source: { kind: 'user' } } })
+    ctxA2.emit('turn/end', session, { type: 'turn/end', data: { turn: index, reason: { kind: 'completed' } } })
+    await sleep(400)
+  }
+  const route = ctxA2.registrations.routes.find((item) => item.path === '/dsh-worklog/panel')
+  const call = () => {
+    const response = { statusCode: 0, headers: {}, body: '', setHeader(key, value) { this.headers[key] = value }, end(value) { this.body = value ?? '' } }
+    route.handler({ method: 'GET', url: '/dsh-worklog/panel' }, response)
+    return JSON.parse(response.body)
+  }
+  const before = call()
+  check('both sessions show before archiving', before.entries.length === 2, JSON.stringify(before.entries?.length))
+
+  writeFileSync(join(storeDir, 'workspace.json'), JSON.stringify({ global: { archivedSessionIds: ['session-drop'] } }))
+  const after = call()
+  check('an archived session disappears from the panel', after.entries.length === 1 && after.entries[0].sessionId === 'session-keep', JSON.stringify(after.entries?.map((entry) => entry.sessionId)))
+
+  const tools = Object.fromEntries(ctxA2.registrations.tools.map((tool) => [tool.name, tool]))
+
+  // --- topic overlay: merge / rename / split without touching the records ----
+  const overlayDir = mkdtempSync(join(tmpdir(), 'worklog-overlay-'))
+  const store3 = createStore(() => ({ storePath: overlayDir, captureEnabled: true, includeToolCalls: true }))
+  store3.append({ ts: '2026-11-26T01:00:00.000Z', date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: 'a', topicId: 't1', topic: '旧主题甲' })
+  store3.append({ ts: '2026-11-26T02:00:00.000Z', date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: 'b', topicId: 't1', topic: '旧主题甲' })
+  store3.append({ ts: '2026-11-26T03:00:00.000Z', date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: 'c', topicId: 't2', topic: '旧主题乙' })
+  const ctxB = fakeContext()
+  apply(ctxB.ctx, resolveConfig({ storePath: overlayDir, captureEnabled: true, aiDeepseek: false, aiOllama: false }))
+  await sleep(300)
+  const toolsB = Object.fromEntries(ctxB.registrations.tools.map((tool) => [tool.name, tool]))
+  const topicsOf = async () => (await toolsB.worklog_topics.execute({ from: '2026-11-26', to: '2026-11-26' })).topics.map((topic) => topic.topic)
+
+  const merged = await toolsB.worklog_topic_edit.execute({ action: 'merge', list: ['旧主题甲', '旧主题乙'], into: '合并后的主题' })
+  check('merge writes the overlay', merged.ok === true && Object.keys(merged.aliases).length === 2, JSON.stringify(merged.aliases))
+  const mergedTopics = await topicsOf()
+  check('merge collapses both topics into one', mergedTopics.length === 1 && mergedTopics[0] === '合并后的主题', JSON.stringify(mergedTopics))
+
+  const split = await toolsB.worklog_topic_edit.execute({ action: 'split', from: '2026-11-26T01:30:00.000Z', to: '2026-11-26T02:30:00.000Z', into: '拆出来的主题' })
+  check('split records a time-range move', split.ok === true && split.moves.length === 1, JSON.stringify(split.moves))
+  const splitTopics = await topicsOf()
+  check('split separates one turn into its own topic', splitTopics.includes('拆出来的主题') && splitTopics.includes('合并后的主题'), JSON.stringify(splitTopics))
+
+  const renamed = await toolsB.worklog_topic_edit.execute({ action: 'rename', from: '拆出来的主题', into: '改名后的主题' })
+  check('rename applies to an already split topic', renamed.ok === true && (await topicsOf()).includes('改名后的主题'), JSON.stringify(await topicsOf()))
+
+  check('records on disk keep their original labels', store3.readDay('2026-11-26').every((record) => record.topic === '旧主题甲' || record.topic === '旧主题乙'), '')
+  await toolsB.worklog_topic_edit.execute({ action: 'reset', confirm: true })
+  check('reset brings the original labels back', JSON.stringify([...(await topicsOf())].sort()) === JSON.stringify(['旧主题乙', '旧主题甲']), JSON.stringify(await topicsOf()))
+
+  writeFileSync(join(storeDir, 'workspace.json'), '{ not json')
+  const broken = call()
+  check('a broken workspace store hides nothing', broken.entries.length === 2, JSON.stringify(broken.entries?.length))
+  if (savedHome === undefined) delete process.env.DSH_HOME
+  else process.env.DSH_HOME = savedHome
+}
+
+console.log('[topic similarity]')
+{
+  const topics = [
+    { id: 't1', label: '打招呼寒暄' },
+    { id: 't2', label: 'archify 扫描器' },
+    { id: 't3', label: '模型双路对比扫描功能' },
+  ]
+  check('a longer version of the same label reuses the topic', resolveTopic('archify 扫描器自动化封装', topics, '')?.id === 't2', JSON.stringify(resolveTopic('archify 扫描器自动化封装', topics, '')))
+  check('a shorter version of the same label also reuses', resolveTopic('archify 扫描器', [{ id: 't9', label: 'archify 扫描器自动化封装' }], '')?.id === 't9', '')
+  check('a reworded label with most bigrams shared reuses', resolveTopic('模型双路对比扫描', topics, '')?.id === 't3', JSON.stringify(resolveTopic('模型双路对比扫描', topics, '')))
+  check('a genuinely different subject still opens a topic', resolveTopic('内网模型接入排查', topics, '')?.label === '内网模型接入排查', JSON.stringify(resolveTopic('内网模型接入排查', topics, '')))
+  check('a one-character label keeps the current topic', resolveTopic('新 图', topics, 't1')?.id === 't1', JSON.stringify(resolveTopic('新 图', topics, 't1')))
+  check('similarity ignores spacing and punctuation', similarTopicLabel('架构 图-渲染', '架构图渲染与复制'), '')
+  check('unrelated labels are not similar', similarTopicLabel('打招呼寒暄', '插件发布可行性评估') === false, '')
+  const topicPrompt = aiSystemPrompt(200, false, true)
+  check('the prompt groups a topic by module, not by turn action', topicPrompt.includes('主题按「这件事」划分') && topicPrompt.includes('同一个模块'), '')
+  check('the prompt keeps separate modules apart', topicPrompt.includes('把「查内网模型」和「改甘特图」算成一个主题——它们不是'), '')
+  check('the prompt forbids one-off topic names', topicPrompt.includes('不要用「修复 X」「调整 Y」「优化 Z」'), '')
+}
+
+console.log('[mobile gantt]')
+{
+  const entries = [
+    { ts: '2026-11-26T01:00:00.000Z', sessionId: 's1', sessionTitle: '工作日志', topic: '甘特图优化' },
+    { ts: '2026-11-26T01:10:00.000Z', sessionId: 's1', sessionTitle: '工作日志', topic: '甘特图优化' },
+    { ts: '2026-11-26T01:40:00.000Z', sessionId: 's1', sessionTitle: '工作日志', topic: '内网模型排查' },
+    // Same topic after a long pause: one row, two bars.
+    { ts: '2026-11-26T05:00:00.000Z', sessionId: 's1', sessionTitle: '工作日志', topic: '甘特图优化' },
+    { ts: '2026-11-26T02:00:00.000Z', sessionId: 's2', sessionTitle: '另一个会话', topic: '插件发布' },
+  ]
+  const html = renderGantt(entries, '2026-11-26', 10 * 60000)
+  check('labels and tracks are separate columns', html.includes('class="g-labels"') && html.includes('class="g-scroll"'), '')
+  const labels = (html.match(/class="g-label/g) ?? []).length
+  const lines = (html.match(/class="g-line/g) ?? []).length
+  // The label column carries one extra spacer that aligns with the hour axis.
+  check('one track line per label row', labels === lines + 1 && lines === 5, `${labels}/${lines}`)
+  check('the strip is wide enough to scroll', /width:(\d+)px/.test(html) && Number(html.match(/width:(\d+)px/)[1]) > 1000, html.match(/width:(\d+)px/)?.[1] ?? '')
+  const bars = [...html.matchAll(/left:([\d.]+)px;width:([\d.]+)px/g)].map((match) => [Number(match[1]), Number(match[2])])
+  const trackWidth = Number(html.match(/width:(\d+)px/)[1])
+  check('every bar sits inside the track', bars.length > 0 && bars.every(([left, width]) => left >= 0 && left + width <= trackWidth + 0.5), JSON.stringify(bars.slice(0, 3)))
+  check('a topic split by a long pause draws two bars', bars.length === 4, String(bars.length))
+  check('the strip opens at the first bar, not at midnight', /data-focus="(\d+)"/.test(html) && Number(html.match(/data-focus="(\d+)"/)[1]) > 0, html.match(/data-focus="(\d+)"/)?.[1] ?? '')
+  check('entries without a topic are skipped', renderGantt([{ ts: '2026-11-26T01:00:00.000Z', sessionId: 's', summary: 'x' }], '2026-11-26', 600000) === '', '')
+
+  // A tapped bar has to explain itself, so it must carry the turn data.
+  const tapHtml = renderGantt([{ ts: '2026-11-26T10:00:00.000Z', sessionId: 's1', sessionTitle: '工作日志', topic: '工作日志插件', summary: '修了移动端甘特的滚动' }], '2026-11-26', 600000)
+  const bar = tapHtml.match(/<i [^>]*>/)?.[0] ?? ''
+  check('a bar carries its summary and clock', bar.includes('data-summary="修了移动端甘特的滚动"') && /data-clock="\d\d:\d\d"/.test(bar), bar.slice(0, 120))
+  check('a bar is a tap target', bar.includes('role="button"') && bar.includes('tabindex="0"'), '')
+
+  const page = readFileSync(new URL('../mobile/page.html', import.meta.url).pathname, 'utf8')
+  check('the page shows a summary sheet on tap', page.includes('g-sheet') && page.includes('closest(\'.g-line i[data-summary]\')'), '')
+  const style = readFileSync(new URL('../mobile/style.css', import.meta.url).pathname, 'utf8')
+  check('the sheet is styled as an overlay', style.includes('.g-sheet') && style.includes('.g-sheet[hidden]'), '')
+}
+
+console.log('[gantt render smoke]')
+{
+  // Unit tests never execute the component, so a ReferenceError there shipped
+  // twice and blanked the whole panel. Rendering it here closes that gap.
+  let output = ''
+  let failed = ''
+  try {
+    output = execFileSync(process.execPath, [new URL('../scripts/smoke-gantt.mjs', import.meta.url).pathname], { encoding: 'utf8' })
+  } catch (error) {
+    failed = String(error.stderr ?? error.message).split('\n').slice(0, 3).join(' ')
+  }
+  check('the Gantt component renders without throwing', failed === '', failed)
+  check('the smoke render produces topic rows', output.includes('主题行') || output.includes('no log for'), output.split('\n')[0] ?? '')
+
+  // The panel itself has to render: three blank tabs came from a reference error
+  // inside the component, which no unit test reached.
+  let panelOut = ''
+  let panelFail = ''
+  try {
+    panelOut = execFileSync(process.execPath, [new URL('./smoke-panel.mjs', import.meta.url).pathname], { encoding: 'utf8' })
+  } catch (error) {
+    panelFail = String(error.stderr ?? error.message).split('\n').slice(0, 3).join(' ')
+  }
+  check('the panel component renders without throwing', panelFail === '', panelFail)
+  check('the panel renders its daily card and date list', panelOut.includes('panel render: ok') && !panelOut.includes('FAIL:'), panelOut.split('\n').filter((line) => line.startsWith('FAIL')).join(' '))
+}
+
+console.log('[daily summary]')
+{
+  const route = (ctxRef, path) => ctxRef.registrations.routes.find((item) => item.path === path)
+  const callJson = async (routeRef, url, body) => {
+    const response = { statusCode: 0, headers: {}, body: '', setHeader(key, value) { this.headers[key] = value }, end(value) { this.body = value ?? '' } }
+    const request = {
+      method: body === undefined ? 'GET' : 'POST',
+      url,
+      on(event, handler) {
+        if (event === 'data') handler(Buffer.from(JSON.stringify(body ?? {})))
+        if (event === 'end') handler()
+        return this
+      },
+      destroy() {},
+    }
+    await routeRef.handler(request, response)
+    return { status: response.statusCode, payload: JSON.parse(response.body || '{}') }
+  }
+
+  const dailyDir = mkdtempSync(join(tmpdir(), 'worklog-daily-'))
+  const dailyStore = createStore(() => ({ storePath: dailyDir, captureEnabled: true, includeToolCalls: true }))
+  for (const [index, topic] of ['甘特图优化', '甘特图优化', '内网模型排查'].entries()) {
+    dailyStore.append({ ts: `2026-11-26T0${index + 1}:00:00.000Z`, date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: `第${index + 1}轮：${topic}`, topicId: 't1', topic })
+  }
+  const ctxD = fakeContext()
+  apply(ctxD.ctx, resolveConfig({ storePath: dailyDir, captureEnabled: true, aiDeepseek: false, aiOllama: false }))
+
+  const daysRoute = route(ctxD, '/dsh-worklog/days')
+  const dailyRoute = route(ctxD, '/dsh-worklog/daily')
+
+  const days = (await callJson(daysRoute, '/dsh-worklog/days')).payload
+  check('the days index lists days with turns', days.days.length === 1 && days.days[0].date === '2026-11-26' && days.days[0].turns === 3, JSON.stringify(days.days))
+  check('the days index knows there is no summary yet', days.days[0].hasSummary === false && days.days[0].topics === 2, JSON.stringify(days.days[0]))
+
+  const empty = await callJson(dailyRoute, '/dsh-worklog/daily?date=2026-11-26')
+  check('GET returns the day without generating', empty.status === 200 && empty.payload.summary === null, JSON.stringify(empty.payload).slice(0, 120))
+  const refused = await callJson(dailyRoute, '/dsh-worklog/daily?date=2026-11-26', { date: '2026-11-26' })
+  check('POST without a model reports failure instead of inventing text', refused.status === 400 && refused.payload.ok === false, JSON.stringify(refused.payload).slice(0, 120))
+
+  mkdirSync(join(dailyDir, 'daily'), { recursive: true })
+  writeFileSync(join(dailyDir, 'daily', '2026-11-26.json'), JSON.stringify({
+    date: '2026-11-26', generatedAt: '2026-11-26T12:00:00.000Z', fingerprint: '3|2026-11-26T03:00:00.000Z',
+    slots: { primary: { text: '今天在改甘特图', model: 'deepseek-flash' }, secondary: { text: 'Gantt rework', model: 'qwen3.5' } },
+  }))
+  const stored = (await callJson(dailyRoute, '/dsh-worklog/daily?date=2026-11-26')).payload
+  check('a stored summary comes back with both slots', stored.summary?.slots?.primary?.text === '今天在改甘特图' && stored.summary?.slots?.secondary?.model === 'qwen3.5', JSON.stringify(stored.summary).slice(0, 120))
+  check('a matching fingerprint is not stale', stored.stale === false, String(stored.stale))
+  dailyStore.append({ ts: '2026-11-26T04:00:00.000Z', date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: '第4轮', topicId: 't1', topic: '甘特图优化' })
+  check('a new turn marks the summary stale', (await callJson(dailyRoute, '/dsh-worklog/daily?date=2026-11-26')).payload.stale === true, '')
+  check('the days index reports the stored summary', (await callJson(daysRoute, '/dsh-worklog/days')).payload.days[0].hasSummary === true, '')
+}
+
+console.log('[day digest]')
+{
+  // Topics weighted by turns, one sample each, and a hard line budget so a small
+  // model cannot drown the big topics in small ones.
+  const dailyDir2 = mkdtempSync(join(tmpdir(), 'worklog-digest-'))
+  const storeD = createStore(() => ({ storePath: dailyDir2, captureEnabled: true, includeToolCalls: true }))
+  const topics = [['大主题甲', 6], ['大主题乙', 5], ['大主题丙', 4], ['小主题丁', 1], ['小主题戊', 1]]
+  let minute = 0
+  for (const [topic, count] of topics) {
+    for (let index = 0; index < count; index += 1) {
+      minute += 1
+      storeD.append({
+        ts: `2026-11-26T${String(Math.floor(minute / 60) + 1).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00.000Z`,
+        date: '2026-11-26', kind: 'turn', sessionId: 's1', summary: `${topic} 第${index + 1}轮`, topicId: 't1', topic,
+      })
+    }
+  }
+  const ctxE = fakeContext()
+  apply(ctxE.ctx, resolveConfig({ storePath: dailyDir2, captureEnabled: true, aiDeepseek: false, aiOllama: false }))
+  const digest = dayDigest(storeD.readDay('2026-11-26'))
+  check('the digest states the day size', digest.includes('【当天共 17 轮，5 个主题】'), digest.split('\n')[0])
+  check('the digest names the three busiest topics', digest.includes('【必须覆盖】大主题甲（6 轮）、大主题乙（5 轮）、大主题丙（4 轮）'), digest.split('\n')[1] ?? '')
+  check('each topic keeps only one sample', (digest.match(/  · /g) ?? []).length === 5, String((digest.match(/  · /g) ?? []).length))
+
+  // A summary that names the three big topics is fine; one that skips them is not.
+  const full = '今天主要做大主题甲、大主题乙和大主题丙，另外顺手碰了小主题丁。'
+  const thin = '今天主要在处理小主题丁和小主题戊，以及一些杂事。'
+  check('a summary that covers the big topics passes', coverageGap(full, storeD.readDay('2026-11-26')).covered === 3, JSON.stringify(coverageGap(full, storeD.readDay('2026-11-26'))))
+  const gap = coverageGap(thin, storeD.readDay('2026-11-26'))
+  check('a summary that skips them is flagged', gap.covered === 0 && gap.missing.length === 3, JSON.stringify(gap))
+
+  // The local model gets a hard length cap.
+  const long = `${'这是很长的一段总结。'.repeat(40)}结尾。`
+  check('the local summary is cut at 400 characters', cleanDailyText(long, 400).length <= 400, String(cleanDailyText(long, 400).length))
+  check('the cut lands on a sentence end', /[。！？]$/.test(cleanDailyText(long, 400)), cleanDailyText(long, 400).slice(-6))
+  check('without a cap the text is kept whole', cleanDailyText(long).length > 400, String(cleanDailyText(long).length))
+}
+
+console.log('[visual spec]')
+{
+  // The DSH visual spec is enforced here: tokens only, three type tiers, three
+  // radius tiers, no dashed structure lines, no invented token names.
+  const clientSource = readFileSync(new URL('../lib/client.js', import.meta.url).pathname, 'utf8')
+  const css = clientSource.slice(clientSource.indexOf('    const CSS = `'), clientSource.indexOf('    function Styles() {'))
+  const allowed = new Set([
+    '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-on-color',
+    '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-border-l1', '--dsw-alias-border-l2',
+    '--dsw-alias-state-business-primary', '--dsw-alias-state-business-tertiary',
+    '--dsw-alias-state-success-primary', '--dsw-alias-state-warn-primary', '--dsw-alias-state-warn-label',
+    '--dsw-alias-state-error-primary', '--dsw-static-deepseek-450', '--dsw-static-deepseek-500',
+    '--dsw-focus-ring-width', '--dsw-focus-ring-color',
+  ])
+  const usedTokens = [...new Set([...css.matchAll(/(--dsw-[a-z0-9-]+)/g)].map((match) => match[1]))]
+  const unknown = usedTokens.filter((token) => !allowed.has(token))
+  check('every dsw token exists in the spec', unknown.length === 0, unknown.join(', '))
+  check('no literal colour values', (css.match(/#[0-9a-fA-F]{3,8}/g) ?? []).length === 0, (css.match(/#[0-9a-fA-F]{3,8}/g) ?? []).join(','))
+  check('no literal font sizes', (css.match(/font-size:\s*[\d.]+px/g) ?? []).length === 0, (css.match(/font-size:\s*[\d.]+px/g) ?? []).join(','))
+  check('no literal radii', (css.match(/border-radius:\s*[\d.]+px/g) ?? []).length === 0, (css.match(/border-radius:\s*[\d.]+px/g) ?? []).join(','))
+  const fontTiers = new Set([...css.matchAll(/font-size:\s*var\((--wl-fs-[a-z]+)\)/g)].map((match) => match[1]))
+  check('at most three font tiers', fontTiers.size <= 3, [...fontTiers].join(','))
+  const radiusTiers = new Set([...css.matchAll(/border-radius:\s*var\((--wl-radius-[a-z]+)\)/g)].map((match) => match[1]))
+  check('at most three radius tiers', radiusTiers.size <= 3, [...radiusTiers].join(','))
+  check('no dashed structural borders', !/dashed/.test(css), '')
+  check('brand-primary is not used as an accent', !/brand-primary/.test(css), '')
+  check('focus rings cover the controls', (css.match(/:focus-visible/g) ?? []).length >= 5, String((css.match(/:focus-visible/g) ?? []).length))
+  check('cards use the card border token', /wl-item[^\n]*border: 1px solid var\(--dsw-alias-border-l2\)/.test(css), '')
+}
+
 console.log('[panel geometry]')
 {
   // The Gantt mixes a JS constant with CSS layout: the "now" line is placed at
@@ -734,9 +1011,11 @@ console.log('[panel geometry]')
   {
     // Every bar element must bind the card itself; a bare `title` never fires fast
     // enough to be seen, and one missing handler is invisible in a screenshot.
-    const bars = source.split("className: 'wl-gantt-bar'").slice(1)
-    const wired = bars.filter((chunk) => chunk.slice(0, 400).includes('onMouseEnter'))
-    check('every bar binds a hover card', bars.length > 0 && wired.length === bars.length, `${wired.length}/${bars.length}`)
+    // Count declarations rather than scanning a character window: the bars are
+    // written in different shapes and a fixed window misses the long ones.
+    const bars = source.split("className: 'wl-gantt-bar'").length - 1
+    const handlers = source.split('onMouseEnter:').length - 1
+    check('every bar binds a hover card', bars > 0 && handlers >= bars, `${handlers} handlers / ${bars} bars`)
   }
 
   // React hooks must not sit behind an early return: the first paint (no data)

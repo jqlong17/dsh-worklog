@@ -9,7 +9,7 @@
 </head>
 <body>
 <header class="topbar"><div class="topbar-copy"><p class="eyebrow">WORKLOG · <span data-date></span></p><h1>{{WORKLOG_TITLE}}</h1></div><span class="total" data-total>0 条</span></header>
-<main><nav class="tabs" aria-label="日志类型" data-tabs></nav><section class="entries" aria-live="polite" data-entries></section><p class="empty" data-empty hidden>今天还没有工作日志</p><footer data-footer></footer></main>
+<main><section class="gantt" data-gantt>{{WORKLOG_GANTT}}</section><nav class="tabs" aria-label="日志类型" data-tabs></nav><section class="entries" aria-live="polite" data-entries></section><p class="empty" data-empty hidden>今天还没有工作日志</p><footer data-footer></footer></main>
 <script>
 (() => {
   const data = {{WORKLOG_DATA}};
@@ -68,6 +68,33 @@
   const topbar = document.querySelector('.topbar');
   const syncTabs = () => document.documentElement.style.setProperty('--header-h', `${topbar.getBoundingClientRect().height}px`);
   syncTabs();
+  // Tapping a bar explains it: title, clock time and that turn's summary.
+  const sheet = document.createElement('div');
+  sheet.className = 'g-sheet';
+  sheet.hidden = true;
+  sheet.innerHTML = '<div class="g-sheet-topic"></div><div class="g-sheet-time"></div><p class="g-sheet-text"></p>';
+  document.body.appendChild(sheet);
+  const hideSheet = () => { for (const bar of document.querySelectorAll('.g-line i[data-active]')) bar.removeAttribute('data-active'); sheet.hidden = true; };
+  document.addEventListener('click', (event) => {
+    const bar = event.target.closest ? event.target.closest('.g-line i[data-summary]') : null;
+    if (!bar) { if (!event.target.closest || !event.target.closest('.g-sheet')) hideSheet(); return; }
+    event.stopPropagation();
+    const already = bar.hasAttribute('data-active');
+    hideSheet();
+    if (already) return;
+    bar.setAttribute('data-active', '1');
+    sheet.querySelector('.g-sheet-topic').textContent = bar.dataset.topic || '';
+    sheet.querySelector('.g-sheet-time').textContent = bar.dataset.clock || '';
+    const text = bar.dataset.summary || '这一轮没有摘要';
+    sheet.querySelector('.g-sheet-text').textContent = text;
+    sheet.hidden = false;
+  }, { passive: true });
+
+  // Park the strip where the day has work: opening at 00:00 looked like a blank chart.
+  for (const strip of document.querySelectorAll('[data-gantt] .g-scroll')) {
+    const focus = Number(strip.dataset.focus || 0);
+    if (Number.isFinite(focus) && focus > 0) strip.scrollLeft = focus;
+  }
   window.addEventListener('resize', syncTabs);
   window.addEventListener('orientationchange', syncTabs);
 })();
