@@ -128,7 +128,12 @@ export function renderGantt(entries, date, gapMs) {
     if (!Number.isFinite(at)) continue
     const key = entry.sessionId || entry.sessionTitle || 'session'
     if (!bySession.has(key)) bySession.set(key, { key, title: entry.sessionTitle || key, turns: [] })
-    bySession.get(key).turns.push({ at, topic: entry.topic.trim(), summary: String(entry.summary ?? '') })
+    const group = bySession.get(key)
+    // A rename lands on the newest record, so let the latest title win.
+    if (entry.sessionTitle && at >= group.turns.reduce((best, turn) => Math.max(best, turn.at), 0)) {
+      group.title = entry.sessionTitle
+    }
+    group.turns.push({ at, topic: entry.topic.trim(), summary: String(entry.summary ?? '') })
   }
   const sessions = [...bySession.values()].filter((group) => group.turns.length > 0)
   if (sessions.length === 0) return ''

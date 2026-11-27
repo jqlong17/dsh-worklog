@@ -850,6 +850,25 @@ console.log('[mobile gantt]')
   check('the sheet is styled as an overlay', style.includes('.g-sheet') && style.includes('.g-sheet[hidden]'), '')
 }
 
+console.log('[session title freshness]')
+{
+  // A renamed session must show its new name, not the one stored on older turns.
+  const records = [
+    { ts: '2026-11-27T01:00:00.000Z', sessionId: 's1', sessionTitle: '旧名字', kind: 'turn', topic: '甲' },
+    { ts: '2026-11-27T02:00:00.000Z', sessionId: 's1', sessionTitle: '新名字', kind: 'turn', topic: '甲' },
+  ]
+  const sessions = groupBySession(records)
+  check('the session list shows the newest title', sessions[0].sessionTitle === '新名字', sessions[0].sessionTitle)
+  const topics = groupByTopic(records)
+  check('the topic view shows the newest title', topics[0].sessions[0].sessionTitle === '新名字', topics[0].sessions[0].sessionTitle)
+
+  const gantt = renderGantt([
+    { ts: '2026-11-27T01:00:00.000Z', sessionId: 's1', sessionTitle: '旧名字', topic: '甲' },
+    { ts: '2026-11-27T02:00:00.000Z', sessionId: 's1', sessionTitle: '新名字', topic: '甲' },
+  ], '2026-11-27', 600000)
+  check('the phone header uses the newest title', gantt.includes('新名字') && !gantt.includes('旧名字'), gantt.slice(0, 120))
+}
+
 console.log('[mobile daily]')
 {
   const day = {
